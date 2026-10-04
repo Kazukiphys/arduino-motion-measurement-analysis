@@ -1,0 +1,1038 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f4f3ed">
+  <title>Arduino Motion Measurement Analysis</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --paper: #f4f3ed;
+      --panel: #fffefa;
+      --ink: #202923;
+      --muted: #68736d;
+      --line: #d9ded7;
+      --green: #146b50;
+      --green-dark: #104d3c;
+      --orange: #dc713d;
+      --grid: #e8ebe5;
+      --chart-left-gutter: 48px;
+      --axis-x-center-offset: 38px;
+      --serif: Georgia, "Times New Roman", serif;
+      --sans: "Yu Gothic UI", "Meiryo", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background-color: var(--paper);
+      background-image: radial-gradient(#d8ddd4 0.65px, transparent 0.65px);
+      background-size: 15px 15px;
+      font-family: var(--sans);
+    }
+    button, input { font: inherit; }
+    button { cursor: pointer; }
+    .app { max-width: 1240px; margin: 0 auto; padding: 28px 34px 36px; }
+    header {
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+      gap: 24px;
+      padding-bottom: 22px;
+      border-bottom: 1px solid #cbd2ca;
+    }
+    .eyebrow {
+      margin: 0 0 8px;
+      color: var(--green);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .12em;
+    }
+    h1 { margin: 0; font-family: var(--serif); font-size: 31px; font-weight: 500; }
+    .subtitle { margin: 6px 0 0; color: var(--muted); font-size: 13px; }
+    .connection { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; white-space: nowrap; }
+    .connection::before { width: 8px; height: 8px; border-radius: 50%; background: #aab2aa; content: ""; }
+    .connection[data-state="connected"]::before { background: #30966d; box-shadow: 0 0 0 3px #d7eee3; }
+    .connection[data-state="error"]::before { background: var(--orange); }
+    main { display: grid; grid-template-columns: minmax(0, 1fr) 260px; gap: 20px; margin-top: 22px; align-items: stretch; }
+    .graph-panel, .side-panel { border: 1px solid var(--line); background: var(--panel); }
+    .graph-panel { display: grid; min-width: 0; grid-template-rows: auto auto minmax(310px, 1fr) auto; padding: 20px 20px 14px; }
+    .primary-column { display: grid; min-width: 0; min-height: 0; grid-template-rows: minmax(0, 1fr) auto; gap: 16px; }
+    .conditions-panel { min-width: 0; padding: 17px 20px; border: 1px solid var(--line); background: var(--panel); }
+    .panel-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+    h2 { margin: 0; font-size: 15px; font-weight: 700; }
+    .sample-count { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+    .chart-wrap { position: relative; min-height: 310px; padding: 4px 2px 0 var(--chart-left-gutter); }
+    canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+    .axis-y, .axis-x { position: absolute; color: var(--ink); font-family: var(--serif); font-size: 15px; }
+    .axis-y { top: 50%; left: calc(var(--chart-left-gutter) / 2); transform: translate(-50%, -50%) rotate(-90deg); white-space: nowrap; }
+    .axis-x { bottom: 0; left: calc(50% + var(--axis-x-center-offset)); transform: translateX(-50%); white-space: nowrap; }
+    .experiment-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 15px; margin: 8px 0 0 49px; color: var(--muted); font-size: 11px; }
+    .legend-item { display: inline-flex; align-items: center; gap: 6px; }
+    .graph-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; margin: -2px 0 12px; }
+    .graph-tabs { display: inline-flex; gap: 3px; padding: 3px; border: 1px solid var(--line); border-radius: 4px; background: #f1f3ef; }
+    .graph-tab { min-width: 72px; padding: 7px 13px; border: 0; border-radius: 2px; background: transparent; color: var(--muted); font-size: 12px; }
+    .graph-tab[aria-selected="true"], .graph-tab[aria-pressed="true"] { background: var(--panel); color: var(--green-dark); box-shadow: 0 1px 3px #26372b1c; font-weight: 700; }
+    .graph-hint { margin: 0; color: var(--muted); font-size: 10px; text-align: right; }
+    .side-panel { align-self: stretch; }
+    .side-section { padding: 17px 17px 18px; border-bottom: 1px solid var(--line); }
+    .side-section:last-child { border-bottom: 0; }
+    .side-title { margin: 0 0 13px; color: var(--muted); font-size: 10px; font-weight: 700; letter-spacing: .08em; }
+    .controls { display: grid; gap: 8px; }
+    .button {
+      display: flex; width: 100%; min-height: 41px; align-items: center; justify-content: center; gap: 8px;
+      border: 1px solid var(--green); border-radius: 3px; background: var(--green); color: white; font-size: 13px; font-weight: 700;
+      transition: background .15s ease, border-color .15s ease, transform .15s ease;
+    }
+    .button:hover:not(:disabled) { transform: translateY(-1px); background: var(--green-dark); border-color: var(--green-dark); }
+    .button.secondary { background: var(--panel); color: var(--green); }
+    .button.secondary:hover:not(:disabled) { background: #eef5f0; }
+    .button.reset { border-color: var(--line); color: #46534b; }
+    .button:disabled { cursor: not-allowed; opacity: .45; }
+    .button svg { width: 15px; height: 15px; fill: currentColor; }
+    .scales { display: grid; gap: 13px; }
+    .scale-label { display: flex; justify-content: space-between; gap: 10px; margin-bottom: 5px; color: var(--muted); font-size: 11px; }
+    .input-wrap { display: flex; align-items: center; gap: 7px; }
+    input[type="number"] {
+      width: 100%; min-width: 0; height: 35px; padding: 0 9px; border: 1px solid var(--line); border-radius: 3px;
+      background: white; color: var(--ink); font-family: var(--serif); font-size: 15px; font-variant-numeric: tabular-nums;
+    }
+    input[type="number"]:focus { outline: 2px solid #a6d0bc; outline-offset: 1px; }
+    .unit { color: var(--muted); font-family: var(--serif); font-size: 13px; }
+    .readings { display: grid; grid-template-columns: 1fr 1fr; gap: 13px 8px; }
+    .scale-readings { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .scale-value { display: block; margin-top: 4px; font-family: var(--serif); font-size: 15px; font-variant-numeric: tabular-nums; }
+    .reading { min-width: 0; }
+    .reading-label { display: block; margin-bottom: 4px; color: var(--muted); font-size: 10px; }
+    .reading-value { display: flex; align-items: baseline; gap: 4px; white-space: nowrap; font-family: var(--serif); font-size: 20px; font-variant-numeric: tabular-nums; }
+    .reading-unit { color: var(--muted); font-size: 11px; }
+    .notice { min-height: 32px; margin: 13px 0 0; color: var(--muted); font-size: 11px; line-height: 1.6; }
+    .notice[data-error="true"] { color: #a84f2b; }
+    .analysis-values { display: grid; gap: 11px; }
+    .analysis-row { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+    .analysis-row[hidden] { display: none; }
+    .analysis-label { color: var(--muted); font-size: 11px; }
+    .analysis-value { font-family: var(--serif); font-size: 15px; font-variant-numeric: tabular-nums; text-align: right; }
+    .analysis-equation { min-width: 0; margin-left: auto; font-family: var(--serif); font-size: 12px; text-align: right; }
+    .analysis-range { margin: -3px 0 11px; color: var(--green); font-family: var(--serif); font-size: 12px; font-variant-numeric: tabular-nums; }
+    .condition-list { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 11px 20px; margin: 0; }
+    .condition-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr); align-items: baseline; gap: 8px; }
+    .condition-row dt { color: var(--muted); font-size: 10px; }
+    .condition-row dd { margin: 0; font-size: 11px; text-align: right; }
+    .condition-value { font-family: var(--serif); font-size: 14px; font-variant-numeric: tabular-nums; }
+    .experiment-list { display: grid; gap: 4px; max-height: 215px; overflow: auto; }
+    .experiment-entry { display: grid; grid-template-columns: 18px minmax(0, 1fr); align-items: center; gap: 5px; }
+    .experiment-toggle { width: 15px; height: 15px; justify-self: center; accent-color: var(--green); cursor: pointer; }
+    .experiment-row { display: grid; width: 100%; min-width: 0; grid-template-columns: 12px minmax(0, 1fr) auto; align-items: center; gap: 9px; padding: 8px 7px; border: 1px solid transparent; border-radius: 3px; background: transparent; color: var(--ink); text-align: left; }
+    .experiment-row:hover { background: #f3f6f1; }
+    .experiment-row[aria-pressed="true"] { border-color: #b4cbbd; background: #edf4ef; }
+    .experiment-swatch { width: 10px; height: 10px; border-radius: 50%; }
+    .experiment-name { font-size: 12px; font-weight: 700; }
+    .experiment-count { color: var(--muted); font-size: 10px; font-variant-numeric: tabular-nums; }
+    .experiment-empty { margin: 0; padding: 5px 2px; color: var(--muted); font-size: 11px; }
+    .experiment-actions { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 9px; }
+    .selected-experiment { overflow: hidden; color: var(--muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+    .icon-button { display: inline-flex; width: 34px; height: 34px; flex: 0 0 auto; align-items: center; justify-content: center; border: 1px solid var(--line); border-radius: 3px; background: var(--panel); color: #46534b; }
+    .icon-button:hover:not(:disabled) { background: #f8ece7; color: #a84f2b; }
+    .icon-button:disabled { cursor: not-allowed; opacity: .4; }
+    .icon-button svg { width: 16px; height: 16px; fill: currentColor; }
+    footer { display: flex; justify-content: space-between; gap: 16px; margin-top: 15px; color: var(--muted); font-size: 10px; }
+
+    @media (max-width: 760px) {
+      .app { padding: 21px 16px 28px; }
+      header { align-items: flex-start; flex-direction: column; gap: 12px; }
+      h1 { font-size: 27px; }
+      main { grid-template-columns: 1fr; gap: 14px; }
+      .primary-column { grid-template-rows: auto auto; }
+      .graph-panel { grid-template-rows: auto auto auto auto; }
+      .chart-wrap { height: 52vh; min-height: 270px; }
+      .side-panel { display: grid; grid-template-columns: 1fr 1fr; }
+      .side-section:nth-child(odd) { border-right: 1px solid var(--line); }
+      .side-section:nth-child(n+3) { border-bottom: 1px solid var(--line); }
+      .condition-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      footer { flex-direction: column; gap: 4px; }
+    }
+    @media (max-width: 430px) {
+      .side-panel { grid-template-columns: 1fr; }
+      .side-section:nth-child(odd) { border-right: 0; }
+      .side-section:nth-child(odd) { border-right: 0; }
+      .graph-toolbar { align-items: flex-start; flex-direction: column; gap: 8px; }
+      .graph-hint { text-align: left; }
+      .graph-panel { padding: 16px 12px 12px; }
+      :root { --chart-left-gutter: 39px; --axis-x-center-offset: 33.5px; }
+      .experiment-legend { margin-left: 40px; }
+    }
+    @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition-duration: .01ms !important; } }
+  </style>
+  <script>
+    window.MathJax = {
+      tex: { inlineMath: [["\\(", "\\)"]] },
+      options: { enableMenu: false }
+    };
+  </script>
+  <script defer src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js"></script>
+</head>
+<body>
+  <div class="app">
+    <header>
+      <div>
+        <p class="eyebrow">PHYSICS LAB / MOTION</p>
+        <h1>運動の測定</h1>
+        <p class="subtitle">超音波センサによる速度の記録</p>
+      </div>
+      <div id="connection" class="connection" data-state="idle" role="status">未接続</div>
+    </header>
+
+    <main>
+      <div class="primary-column">
+        <section class="graph-panel" aria-labelledby="graph-title">
+          <div class="graph-toolbar">
+            <div class="graph-tabs" role="tablist" aria-label="グラフの種類">
+              <button id="xt-tab" class="graph-tab" type="button" role="tab" aria-selected="true" aria-controls="chart-panel">\(x-t\)</button>
+              <button id="vt-tab" class="graph-tab" type="button" role="tab" aria-selected="false" aria-controls="chart-panel">\(v-t\)</button>
+            </div>
+            <div class="graph-tabs" role="group" aria-label="グラフ操作">
+              <button id="pan-mode" class="graph-tab" type="button" aria-pressed="false">範囲移動</button>
+              <button id="select-mode" class="graph-tab" type="button" aria-pressed="true">範囲指定</button>
+            </div>
+            <p class="graph-hint">全実験を重ねて表示</p>
+          </div>
+          <div class="panel-heading">
+            <h2 id="graph-title">位置と時間</h2>
+            <span id="sample-count" class="sample-count">0 実験</span>
+          </div>
+          <div id="chart-panel" class="chart-wrap" role="tabpanel" aria-labelledby="xt-tab">
+            <span id="axis-y" class="axis-y">\(x\;(\mathrm{m})\)</span>
+            <canvas id="chart" aria-label="位置と時間のグラフ"></canvas>
+            <span class="axis-x">\(t\;(\mathrm{s})\)</span>
+          </div>
+          <div id="experiment-legend" class="experiment-legend" aria-label="実験の凡例"></div>
+        </section>
+
+        <section class="conditions-panel" aria-label="実験条件">
+          <h2 class="side-title">EXPERIMENT CONDITIONS</h2>
+          <dl class="condition-list">
+            <div class="condition-row"><dt>計測機器</dt><dd>Arduino UNO R4<br>HC-SR04</dd></div>
+            <div class="condition-row"><dt>平均サンプリング間隔</dt><dd><span id="sample-interval" class="condition-value">--</span> <span class="unit">\(\mathrm{ms}\)</span></dd></div>
+            <div class="condition-row"><dt>実測サンプリングレート</dt><dd><span id="sample-rate" class="condition-value">--</span> <span class="unit">\(\mathrm{Hz}\)</span></dd></div>
+            <div class="condition-row"><dt>スケッチ内 delay</dt><dd>10 <span class="unit">\(\mathrm{ms}\)</span></dd></div>
+            <div class="condition-row"><dt>シリアル通信</dt><dd>9600 baud</dd></div>
+            <div class="condition-row"><dt>配線（Trig / Echo）</dt><dd>D4 / D3</dd></div>
+            <div class="condition-row"><dt>速度の算出</dt><dd>加重移動平均<br>＋3点最小二乗</dd></div>
+          </dl>
+          <p class="notice">サンプリング統計は直近100区間のArduino時刻から算出します。エコー待ち時間により間隔は変動します。</p>
+        </section>
+      </div>
+
+      <aside class="side-panel" aria-label="測定操作と表示設定">
+        <section class="side-section">
+          <h2 class="side-title">MEASUREMENT</h2>
+          <div class="controls">
+            <button id="start-button" class="button" type="button" title="シリアルポートを選び測定を開始">
+              <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.8v10.4L13 8z"/></svg>測定開始
+            </button>
+            <button id="pause-button" class="button secondary" type="button" disabled title="測定データの記録を一時停止">
+              <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 3h3.6v10H3.5zm5.4 0h3.6v10H8.9z"/></svg>一時停止
+            </button>
+            <button id="reset-button" class="button reset" type="button" title="すべての実験データをリセット">
+              <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 3h10v10H3z"/></svg>全実験をリセット
+            </button>
+            <button id="download-button" class="button secondary" type="button" disabled title="測定データをCSVで保存">
+              <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M7 2h2v6.2l2.1-2.1 1.4 1.4L8 12 3.5 7.5l1.4-1.4L7 8.2zM3 12h10v2H3z"/></svg>CSVを書き出す
+            </button>
+          </div>
+          <p id="notice" class="notice" role="status">測定開始を押してArduinoのポートを選択してください。</p>
+        </section>
+
+        <section class="side-section">
+          <h2 class="side-title">LIVE VALUES</h2>
+          <div class="readings">
+            <div class="reading"><span class="reading-label">経過時間</span><span class="reading-value"><span id="live-time">--</span><span class="reading-unit">\(\mathrm{s}\)</span></span></div>
+            <div class="reading"><span class="reading-label">速度</span><span class="reading-value"><span id="live-velocity">--</span><span class="reading-unit">\(\mathrm{m/s}\)</span></span></div>
+            <div class="reading"><span class="reading-label">距離</span><span class="reading-value"><span id="live-distance">--</span><span class="reading-unit">\(\mathrm{cm}\)</span></span></div>
+          </div>
+        </section>
+        <section class="side-section" aria-label="選択範囲の解析">
+          <h2 class="side-title">RANGE ANALYSIS</h2>
+          <p id="analysis-range" class="analysis-range">未選択</p>
+          <div class="analysis-values">
+            <div class="analysis-row"><span class="analysis-label">近似直線</span><span id="analysis-equation" class="analysis-equation">--</span></div>
+            <div class="analysis-row"><span class="analysis-label">R²</span><span id="analysis-r-squared" class="analysis-value">--</span></div>
+            <div id="analysis-area-row" class="analysis-row" hidden><span class="analysis-label">面積（変位）</span><span id="analysis-area" class="analysis-value">--</span></div>
+          </div>
+        </section>
+        <section class="side-section" aria-label="実験データ">
+          <h2 class="side-title">EXPERIMENTS</h2>
+          <div id="experiment-list" class="experiment-list"><p class="experiment-empty">測定開始で実験1を記録します。</p></div>
+          <div class="experiment-actions">
+            <span id="selected-experiment" class="selected-experiment">実験未選択</span>
+            <button id="delete-experiment" class="icon-button" type="button" title="選択中の実験を削除" aria-label="選択中の実験を削除" disabled>
+              <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5 2h6l.6 1.2H14v1.5H2V3.2h2.4L5 2zm-1.5 4h9l-.6 8H4.1l-.6-8z"/></svg>
+            </button>
+          </div>
+        </section>
+      </aside>
+    </main>
+  </div>
+
+  <script>
+    (() => {
+      const canvas = document.getElementById("chart");
+      const context = canvas.getContext("2d");
+      const connection = document.getElementById("connection");
+      const notice = document.getElementById("notice");
+      const startButton = document.getElementById("start-button");
+      const pauseButton = document.getElementById("pause-button");
+      const downloadButton = document.getElementById("download-button");
+      const resetButton = document.getElementById("reset-button");
+      const experimentList = document.getElementById("experiment-list");
+      const experiments = [];
+      const colors = ["#146b50", "#dc713d", "#4176a5", "#a34e62", "#7a6a2f", "#6a5ca3"];
+      const plot = { left: 42, right: 12, top: 14, bottom: 29 };
+      const sampleIntervalWindowSize = 100;
+      const sampleIntervals = [];
+      let port = null;
+      let reading = false;
+      let capturing = false;
+      let measurementStarted = false;
+      let lastDeviceTimestamp = null;
+      let activeExperiment = null;
+      let selectedExperimentId = null;
+      let nextExperimentNumber = 1;
+      let lastTime = 0;
+      let lastVelocity = null;
+      let lastDistance = null;
+      let timeSpan = 10;
+      let velocityLimit = 2;
+      let positionLimit = 3;
+      let graphMode = "xt";
+      let interactionMode = "select";
+      let viewOffset = 0;
+      let velocityViewOffset = 0;
+      let positionViewOffset = 0;
+      let selection = null;
+      let drag = null;
+
+      function setNotice(message, isError = false) {
+        notice.textContent = message;
+        notice.dataset.error = String(isError);
+      }
+
+      function setConnection(label, state) {
+        connection.textContent = label;
+        connection.dataset.state = state;
+      }
+
+      function setStartButtonLabel(label) {
+        startButton.innerHTML = `<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.8v10.4L13 8z"/></svg>${label}`;
+      }
+
+      function updateSamplingReadings() {
+        if (!sampleIntervals.length) return;
+        const averageInterval = sampleIntervals.reduce((total, interval) => total + interval, 0) / sampleIntervals.length;
+        document.getElementById("sample-interval").textContent = averageInterval.toFixed(1);
+        document.getElementById("sample-rate").textContent = (1000 / averageInterval).toFixed(1);
+      }
+
+      function getSelectedExperiment() {
+        return experiments.find((experiment) => experiment.id === selectedExperimentId) ?? null;
+      }
+
+      function renderExperiments() {
+        experimentList.replaceChildren();
+        if (!experiments.length) {
+          const empty = document.createElement("p");
+          empty.className = "experiment-empty";
+          empty.textContent = "測定開始で実験1を記録します。";
+          experimentList.append(empty);
+        }
+        for (const experiment of experiments) {
+          const entry = document.createElement("div");
+          entry.className = "experiment-entry";
+          const toggle = document.createElement("input");
+          toggle.className = "experiment-toggle";
+          toggle.type = "checkbox";
+          toggle.checked = experiment.graphVisible;
+          toggle.setAttribute("aria-label", `${experiment.name}をグラフに表示`);
+          toggle.addEventListener("change", () => {
+            experiment.graphVisible = toggle.checked;
+            renderLegend();
+            drawGraph();
+          });
+          const button = document.createElement("button");
+          button.className = "experiment-row";
+          button.type = "button";
+          button.setAttribute("aria-pressed", String(experiment.id === selectedExperimentId));
+          button.addEventListener("click", () => selectExperiment(experiment.id));
+          const swatch = document.createElement("span");
+          swatch.className = "experiment-swatch";
+          swatch.style.backgroundColor = experiment.color;
+          const name = document.createElement("span");
+          name.className = "experiment-name";
+          name.textContent = experiment.name;
+          const count = document.createElement("span");
+          count.className = "experiment-count";
+          count.textContent = `${experiment.samples.length.toLocaleString("ja-JP")} 点`;
+          button.append(swatch, name, count);
+          entry.append(toggle, button);
+          experimentList.append(entry);
+        }
+        const selected = getSelectedExperiment();
+        document.getElementById("selected-experiment").textContent = selected ? `${selected.name} を選択中` : "実験未選択";
+        document.getElementById("delete-experiment").disabled = !selected || capturing;
+        document.getElementById("sample-count").textContent = `${experiments.length} 実験`;
+        downloadButton.disabled = !experiments.some((experiment) => experiment.samples.length);
+        renderLegend();
+      }
+
+      function renderLegend() {
+        const legend = document.getElementById("experiment-legend");
+        legend.replaceChildren();
+        for (const experiment of experiments.filter((item) => item.graphVisible)) {
+          const item = document.createElement("span");
+          item.className = "legend-item";
+          const swatch = document.createElement("span");
+          swatch.className = "experiment-swatch";
+          swatch.style.backgroundColor = experiment.color;
+          item.append(swatch, document.createTextNode(experiment.name));
+          legend.append(item);
+        }
+      }
+
+      function selectExperiment(id) {
+        selectedExperimentId = id;
+        selection = null;
+        const selected = getSelectedExperiment();
+        if (selected?.samples.length) {
+          const latest = selected.samples[selected.samples.length - 1];
+          lastTime = latest.time;
+          lastVelocity = latest.velocity;
+          lastDistance = latest.distance;
+        } else {
+          lastTime = 0;
+          lastVelocity = null;
+          lastDistance = null;
+        }
+        renderExperiments();
+        updateReadings();
+        updateAnalysis();
+        drawGraph();
+      }
+
+      function setGraphMode(mode) {
+        graphMode = mode;
+        const isVelocity = mode === "vt";
+        document.getElementById("vt-tab").setAttribute("aria-selected", String(isVelocity));
+        document.getElementById("xt-tab").setAttribute("aria-selected", String(!isVelocity));
+        document.getElementById("chart-panel").setAttribute("aria-labelledby", isVelocity ? "vt-tab" : "xt-tab");
+        document.getElementById("graph-title").textContent = isVelocity ? "速度と時間" : "位置と時間";
+        document.getElementById("axis-y").innerHTML = isVelocity ? "\\(v\\;(\\mathrm{m/s})\\)" : "\\(x\\;(\\mathrm{m})\\)";
+        canvas.setAttribute("aria-label", isVelocity ? "速度と時間のグラフ" : "位置と時間のグラフ");
+        document.getElementById("analysis-area-row").hidden = !isVelocity;
+        typesetMath([document.getElementById("axis-y")]);
+        updateAnalysis();
+        drawGraph();
+      }
+
+      function setInteractionMode(mode) {
+        interactionMode = mode;
+        document.getElementById("pan-mode").setAttribute("aria-pressed", String(mode === "pan"));
+        document.getElementById("select-mode").setAttribute("aria-pressed", String(mode === "select"));
+        canvas.style.cursor = mode === "pan" ? "grab" : "default";
+      }
+
+      function typesetMath(elements) {
+        const typeset = () => {
+          const mathJax = window.MathJax;
+          if (!mathJax?.typesetPromise) return;
+          mathJax.typesetClear?.(elements);
+          mathJax.typesetPromise(elements).catch(() => {});
+        };
+        if (window.MathJax?.typesetPromise) typeset();
+        else window.addEventListener("load", typeset, { once: true });
+      }
+
+      function updateAnalysis() {
+        const rangeLabel = document.getElementById("analysis-range");
+        const equationLabel = document.getElementById("analysis-equation");
+        const rSquaredLabel = document.getElementById("analysis-r-squared");
+        const areaLabel = document.getElementById("analysis-area");
+        const selected = getSelectedExperiment();
+        const data = selected?.samples ?? [];
+        if (!selection) {
+          rangeLabel.textContent = "未選択";
+          equationLabel.textContent = "--";
+          rSquaredLabel.textContent = "--";
+          areaLabel.textContent = "--";
+        } else {
+          const result = analyzeRange(selection.start, selection.end, data);
+          if (!result) {
+            rangeLabel.textContent = "データが不足しています";
+            equationLabel.textContent = "--";
+            rSquaredLabel.textContent = "--";
+            areaLabel.textContent = "--";
+          } else {
+            const interceptSign = result.intercept < 0 ? "-" : "+";
+            rangeLabel.innerHTML = `\\(${selection.start.toFixed(2)}\\text{--}${selection.end.toFixed(2)}\\,\\mathrm{s}\\)`;
+            equationLabel.innerHTML = `\\(y = ${result.slope.toFixed(3)}x ${interceptSign} ${Math.abs(result.intercept).toFixed(3)}\\)`;
+            rSquaredLabel.innerHTML = `\\(R^2 = ${result.rSquared.toFixed(4)}\\)`;
+            areaLabel.innerHTML = `\\(${result.area.toFixed(3)}\\,\\mathrm{m}\\)`;
+          }
+        }
+        typesetMath([rangeLabel, equationLabel, rSquaredLabel, areaLabel]);
+      }
+
+      function resizeCanvas() {
+        const rect = canvas.getBoundingClientRect();
+        if (!rect.width || !rect.height) return;
+        const ratio = window.devicePixelRatio || 1;
+        canvas.width = Math.round(rect.width * ratio);
+        canvas.height = Math.round(rect.height * ratio);
+        context.setTransform(ratio, 0, 0, ratio, 0, 0);
+        drawGraph();
+      }
+
+      function getVisibleExperiments() {
+        return experiments.filter((experiment) => experiment.graphVisible);
+      }
+
+      function getTimelineExperiments() {
+        return activeExperiment?.graphVisible ? [activeExperiment] : getVisibleExperiments();
+      }
+
+      function appendSmoothCurve(points) {
+        for (let index = 0; index < points.length - 1; index++) {
+          const previous = points[Math.max(0, index - 1)];
+          const current = points[index];
+          const next = points[index + 1];
+          const following = points[Math.min(points.length - 1, index + 2)];
+          context.bezierCurveTo(
+            current.x + (next.x - previous.x) / 6,
+            current.y + (next.y - previous.y) / 6,
+            next.x - (following.x - current.x) / 6,
+            next.y - (following.y - current.y) / 6,
+            next.x,
+            next.y
+          );
+        }
+      }
+
+      function drawGraph() {
+        const rect = canvas.getBoundingClientRect();
+        const width = rect.width;
+        const height = rect.height;
+        if (!width || !height) return;
+
+        const plotWidth = width - plot.left - plot.right;
+        const plotHeight = height - plot.top - plot.bottom;
+        const visibleExperiments = getVisibleExperiments();
+        const { start: startTime, end: endTime } = visibleTimeRange();
+        const xFor = (time) => plot.left + ((time - startTime) / timeSpan) * plotWidth;
+        const verticalOffset = graphMode === "vt" ? velocityViewOffset : positionViewOffset;
+        const verticalMinimum = (graphMode === "vt" ? -velocityLimit : 0) + verticalOffset;
+        const verticalMaximum = (graphMode === "vt" ? velocityLimit : positionLimit) + verticalOffset;
+        const valueFor = (sample) => graphMode === "vt" ? sample.velocity : sample.distance / 100;
+        const yFor = (value) => plot.top + ((verticalMaximum - value) / (verticalMaximum - verticalMinimum)) * plotHeight;
+
+        context.clearRect(0, 0, width, height);
+        context.font = '11px Georgia, "Times New Roman", serif';
+        context.textAlign = "right";
+        context.textBaseline = "middle";
+        context.lineWidth = 1;
+        context.strokeStyle = "#e8ebe5";
+        context.fillStyle = "#68736d";
+
+        for (let index = 0; index <= 4; index++) {
+          const value = verticalMaximum - ((verticalMaximum - verticalMinimum) * index / 4);
+          const y = plot.top + plotHeight * index / 4;
+          context.beginPath();
+          context.moveTo(plot.left, y);
+          context.lineTo(width - plot.right, y);
+          context.stroke();
+          context.fillText(value.toFixed(verticalMaximum < 1 ? 2 : 1), plot.left - 8, y);
+        }
+
+        for (let index = 0; index <= 5; index++) {
+          const time = startTime + timeSpan * index / 5;
+          const x = plot.left + plotWidth * index / 5;
+          context.beginPath();
+          context.moveTo(x, plot.top);
+          context.lineTo(x, plot.top + plotHeight);
+          context.stroke();
+          context.textAlign = "center";
+          context.textBaseline = "top";
+          context.fillText(time.toFixed(timeSpan < 10 ? 1 : 0), x, plot.top + plotHeight + 8);
+          context.textAlign = "right";
+          context.textBaseline = "middle";
+        }
+
+        context.strokeStyle = "#8f9a91";
+        context.lineWidth = 1.2;
+        context.beginPath();
+        context.moveTo(plot.left, plot.top);
+        context.lineTo(plot.left, plot.top + plotHeight);
+        context.lineTo(width - plot.right, plot.top + plotHeight);
+        context.stroke();
+
+        context.save();
+        context.beginPath();
+        context.rect(plot.left, plot.top, plotWidth, plotHeight);
+        context.clip();
+        const selected = getSelectedExperiment();
+        if (selection && selected?.graphVisible) {
+          const startValue = velocityAt(selection.start, selected.samples);
+          const endValue = velocityAt(selection.end, selected.samples);
+          if (startValue !== null && endValue !== null) {
+            const areaPoints = [
+              { time: selection.start, value: startValue },
+              ...selected.samples
+                .filter((sample) => sample.time > selection.start && sample.time < selection.end)
+                .map((sample) => ({ time: sample.time, value: valueFor(sample) })),
+              { time: selection.end, value: endValue }
+            ].map((point) => ({ x: xFor(point.time), y: yFor(point.value) }));
+            context.beginPath();
+            context.moveTo(areaPoints[0].x, yFor(0));
+            context.lineTo(areaPoints[0].x, areaPoints[0].y);
+            appendSmoothCurve(areaPoints);
+            context.lineTo(areaPoints[areaPoints.length - 1].x, yFor(0));
+            context.closePath();
+            context.fillStyle = "rgba(220, 113, 61, 0.22)";
+            context.fill();
+          }
+        }
+        for (const experiment of visibleExperiments) {
+          const radius = experiment.id === selectedExperimentId ? 3 : 2.2;
+          const points = experiment.samples
+            .filter((sample) => sample.time >= startTime && sample.time <= endTime)
+            .map((sample) => ({ x: xFor(sample.time), y: yFor(valueFor(sample)) }));
+          if (points.length > 1) {
+            context.beginPath();
+            context.moveTo(points[0].x, points[0].y);
+            appendSmoothCurve(points);
+            context.strokeStyle = experiment.color;
+            context.lineWidth = experiment.id === selectedExperimentId ? 1.8 : 1.2;
+            context.stroke();
+          }
+          context.beginPath();
+          for (const point of points) {
+            context.moveTo(point.x + radius, point.y);
+            context.arc(point.x, point.y, radius, 0, Math.PI * 2);
+          }
+          context.fillStyle = experiment.color;
+          context.fill();
+        }
+        if (selection) {
+          context.strokeStyle = "#dc713d";
+          context.lineWidth = 1;
+          for (const x of [xFor(selection.start), xFor(selection.end)]) {
+            context.beginPath();
+            context.moveTo(x, plot.top);
+            context.lineTo(x, plot.top + plotHeight);
+            context.stroke();
+          }
+        }
+        const fit = selection && selected?.graphVisible ? analyzeRange(selection.start, selection.end, selected.samples) : null;
+        const fitStart = Math.max(selection?.start ?? 0, startTime);
+        const fitEnd = Math.min(selection?.end ?? 0, endTime);
+        if (fit && fitEnd > fitStart) {
+          context.strokeStyle = "#dc713d";
+          context.lineWidth = 2;
+          context.setLineDash([6, 4]);
+          context.beginPath();
+          context.moveTo(xFor(fitStart), yFor(fit.slope * fitStart + fit.intercept));
+          context.lineTo(xFor(fitEnd), yFor(fit.slope * fitEnd + fit.intercept));
+          context.stroke();
+          context.setLineDash([]);
+        }
+        context.restore();
+      }
+
+      function updateReadings() {
+        const selected = getSelectedExperiment();
+        const latest = selected?.samples.at(-1) ?? null;
+        document.getElementById("live-time").textContent = latest ? latest.time.toFixed(2) : "--";
+        document.getElementById("live-velocity").textContent = latest ? latest.velocity.toFixed(2) : "--";
+        document.getElementById("live-distance").textContent = latest ? latest.distance.toFixed(1) : "--";
+      }
+
+      function graphValue(sample) {
+        return graphMode === "vt" ? sample.velocity : sample.distance / 100;
+      }
+
+      function velocityAt(time, data) {
+        for (let index = 1; index < data.length; index++) {
+          const right = data[index];
+          if (right.time < time) continue;
+          const left = data[index - 1];
+          const duration = right.time - left.time;
+          if (duration <= 0) return graphValue(right);
+          const fraction = (time - left.time) / duration;
+          return graphValue(left) + (graphValue(right) - graphValue(left)) * fraction;
+        }
+        return data.length ? graphValue(data[data.length - 1]) : null;
+      }
+
+      function analyzeRange(start, end, data) {
+        if (end <= start || data.length < 2) return null;
+        const startVelocity = velocityAt(start, data);
+        const endVelocity = velocityAt(end, data);
+        if (startVelocity === null || endVelocity === null) return null;
+        const points = [
+          { time: start, value: startVelocity },
+          ...data.filter((sample) => sample.time > start && sample.time < end).map((sample) => ({ time: sample.time, value: graphValue(sample) })),
+          { time: end, value: endVelocity }
+        ];
+        let meanTime = 0;
+        let meanValue = 0;
+        for (const point of points) {
+          meanTime += point.time;
+          meanValue += point.value;
+        }
+        meanTime /= points.length;
+        meanValue /= points.length;
+        let covariance = 0;
+        let timeVariance = 0;
+        let valueVariance = 0;
+        for (const point of points) {
+          covariance += (point.time - meanTime) * (point.value - meanValue);
+          timeVariance += (point.time - meanTime) ** 2;
+          valueVariance += (point.value - meanValue) ** 2;
+        }
+        if (timeVariance === 0) return null;
+        const slope = covariance / timeVariance;
+        const intercept = meanValue - slope * meanTime;
+        const residualVariance = points.reduce((sum, point) => sum + (point.value - (slope * point.time + intercept)) ** 2, 0);
+        const rSquared = valueVariance === 0 ? 1 : Math.max(0, 1 - residualVariance / valueVariance);
+        let area = 0;
+        for (let index = 1; index < points.length; index++) {
+          const previous = points[index - 1];
+          const current = points[index];
+          area += ((previous.value + current.value) / 2) * (current.time - previous.time);
+        }
+        return { slope, intercept, rSquared, area };
+      }
+
+      function handleLine(line) {
+        const values = line.trim().split(",").map(Number);
+        if (values.length < 3 || !values.slice(0, 3).every(Number.isFinite)) return;
+        const [deviceTime, distance, velocity] = values;
+        if (lastDeviceTimestamp !== null) {
+          const interval = (deviceTime - lastDeviceTimestamp) * 1000;
+          if (interval > 0) {
+            sampleIntervals.push(interval);
+            if (sampleIntervals.length > sampleIntervalWindowSize) sampleIntervals.shift();
+            updateSamplingReadings();
+          }
+        }
+        lastDeviceTimestamp = deviceTime;
+        if (!capturing || !activeExperiment) return;
+        if (activeExperiment.originTime === null) activeExperiment.originTime = deviceTime;
+        const time = Math.max(0, deviceTime - activeExperiment.originTime);
+        const samples = activeExperiment.samples;
+        if (samples.length && time < samples[samples.length - 1].time) return;
+        samples.push({ time, distance, velocity });
+        lastTime = time;
+        lastVelocity = velocity;
+        lastDistance = distance;
+        updateReadings();
+        renderExperiments();
+        drawGraph();
+      }
+
+      async function readPort() {
+        if (reading || !port) return;
+        reading = true;
+        try {
+          const decoder = new TextDecoder();
+          let buffer = "";
+          while (port.readable) {
+            const reader = port.readable.getReader();
+            try {
+              while (true) {
+                const { value, done } = await reader.read();
+                if (done) break;
+                buffer += decoder.decode(value, { stream: true });
+                const lines = buffer.split(/\r?\n/);
+                buffer = lines.pop() || "";
+                for (const line of lines) handleLine(line);
+              }
+            } finally {
+              reader.releaseLock();
+            }
+          }
+        } catch (error) {
+          setConnection("接続エラー", "error");
+          setNotice(`シリアル通信に失敗しました: ${error.message}`, true);
+        } finally {
+          reading = false;
+          if (!port?.readable) {
+            capturing = false;
+            startButton.disabled = false;
+            setStartButtonLabel(experiments.length ? "次の実験を開始" : "測定開始");
+            pauseButton.disabled = true;
+            resetButton.disabled = false;
+            renderExperiments();
+            pauseButton.innerHTML = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 3h3.6v10H3.5zm5.4 0h3.6v10H8.9z"/></svg>一時停止';
+            if (connection.dataset.state === "connected") setConnection("切断", "idle");
+          }
+        }
+      }
+
+      async function startMeasurement() {
+        if (!("serial" in navigator)) {
+          setNotice("Web Serialに対応したChromeまたはEdgeで開いてください。", true);
+          return;
+        }
+        startButton.disabled = true;
+        try {
+          if (!port) {
+            port = await navigator.serial.requestPort();
+            await port.open({ baudRate: 9600 });
+            setConnection("接続中 · 9600 baud", "connected");
+            readPort();
+          }
+          const number = nextExperimentNumber++;
+          activeExperiment = { id: number, name: `実験${number}`, color: colors[(number - 1) % colors.length], samples: [], originTime: null, graphVisible: true };
+          viewOffset = 0;
+          velocityViewOffset = 0;
+          positionViewOffset = 0;
+          experiments.push(activeExperiment);
+          selectedExperimentId = activeExperiment.id;
+          selection = null;
+          lastTime = 0;
+          lastVelocity = null;
+          lastDistance = null;
+          capturing = true;
+          measurementStarted = true;
+          pauseButton.disabled = false;
+          resetButton.disabled = true;
+          pauseButton.innerHTML = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 3h3.6v10H3.5zm5.4 0h3.6v10H8.9z"/></svg>一時停止';
+          renderExperiments();
+          updateReadings();
+          updateAnalysis();
+          drawGraph();
+          setNotice("測定中です。センサの前で物体を動かしてください。");
+        } catch (error) {
+          startButton.disabled = false;
+          if (error.name !== "NotFoundError") setNotice(`ポートを開けませんでした: ${error.message}`, true);
+        }
+      }
+
+      function togglePause() {
+        capturing = !capturing;
+        if (capturing) {
+          pauseButton.innerHTML = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 3h3.6v10H3.5zm5.4 0h3.6v10H8.9z"/></svg>一時停止';
+          setNotice("測定中です。センサの前で物体を動かしてください。");
+        } else {
+          pauseButton.innerHTML = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.8v10.4L13 8z"/></svg>測定を再開';
+          setNotice("一時停止中です。グラフ上をドラッグして解析区間を選べます。");
+        }
+        startButton.disabled = capturing;
+        setStartButtonLabel(experiments.length ? "次の実験を開始" : "測定開始");
+        resetButton.disabled = capturing;
+        renderExperiments();
+        canvas.style.cursor = "default";
+      }
+
+      function deleteSelectedExperiment() {
+        if (capturing) return;
+        const selected = getSelectedExperiment();
+        if (!selected || !window.confirm(`${selected.name}のデータを削除しますか？`)) return;
+        experiments.splice(experiments.findIndex((experiment) => experiment.id === selected.id), 1);
+        if (activeExperiment?.id === selected.id) activeExperiment = null;
+        selectedExperimentId = experiments.at(-1)?.id ?? null;
+        selection = null;
+        const latest = getSelectedExperiment()?.samples.at(-1) ?? null;
+        lastTime = latest?.time ?? 0;
+        lastVelocity = latest?.velocity ?? null;
+        lastDistance = latest?.distance ?? null;
+        renderExperiments();
+        updateReadings();
+        updateAnalysis();
+        drawGraph();
+      }
+
+      function resetGraph() {
+        if (capturing || !experiments.length || !window.confirm("すべての実験データを削除しますか？")) return;
+        experiments.length = 0;
+        activeExperiment = null;
+        selectedExperimentId = null;
+        nextExperimentNumber = 1;
+        lastTime = 0;
+        lastVelocity = null;
+        lastDistance = null;
+        selection = null;
+        setStartButtonLabel("測定開始");
+        renderExperiments();
+        updateReadings();
+        updateAnalysis();
+        drawGraph();
+        setNotice(capturing ? "グラフをリセットしました。測定を続けています。" : "グラフをリセットしました。");
+      }
+
+      function graphPoint(event) {
+        const rect = canvas.getBoundingClientRect();
+        return { x: event.clientX - rect.left, y: event.clientY - rect.top, width: rect.width, height: rect.height };
+      }
+
+      function visibleTimeRange() {
+        const latestTime = Math.max(timeSpan, ...getTimelineExperiments().map((experiment) => experiment.samples.at(-1)?.time ?? 0));
+        const end = Math.max(timeSpan, latestTime + viewOffset);
+        return { start: Math.max(0, end - timeSpan), end };
+      }
+
+      function timeAtX(x, width) {
+        const range = visibleTimeRange();
+        const plotWidth = width - plot.left - plot.right;
+        return range.start + ((x - plot.left) / plotWidth) * (range.end - range.start);
+      }
+
+      function isInsidePlot(point) {
+        return point.x >= plot.left && point.x <= point.width - plot.right && point.y >= plot.top && point.y <= point.height - plot.bottom;
+      }
+
+      function axisAtPoint(point) {
+        const onHorizontalAxis = point.x >= plot.left && point.x <= point.width - plot.right && Math.abs(point.y - (point.height - plot.bottom)) <= 10;
+        const onVerticalAxis = point.y >= plot.top && point.y <= point.height - plot.bottom && Math.abs(point.x - plot.left) <= 10;
+        if (onHorizontalAxis) return "time-scale";
+        if (onVerticalAxis) return "velocity-scale";
+        return null;
+      }
+
+      function updateSelection(time) {
+        if (!drag) return;
+        const data = getSelectedExperiment()?.samples ?? [];
+        const firstTime = data[0]?.time ?? time;
+        const lastSampleTime = data[data.length - 1]?.time ?? time;
+        const start = Math.max(firstTime, Math.min(lastSampleTime, Math.min(drag.startTime, time)));
+        const end = Math.max(firstTime, Math.min(lastSampleTime, Math.max(drag.startTime, time)));
+        selection = end > start ? { start, end } : null;
+        updateAnalysis();
+        drawGraph();
+      }
+
+      function handlePointerDown(event) {
+        const point = graphPoint(event);
+        const axis = axisAtPoint(point);
+        if (axis) {
+          const initialScale = axis === "time-scale" ? timeSpan : graphMode === "vt" ? velocityLimit : positionLimit;
+          drag = { type: axis, startX: point.x, startY: point.y, initialScale };
+          canvas.setPointerCapture(event.pointerId);
+          event.preventDefault();
+          return;
+        }
+        if (!isInsidePlot(point)) return;
+        if (interactionMode === "pan") {
+          drag = {
+            type: "pan",
+            startX: point.x,
+            startY: point.y,
+            startOffset: viewOffset,
+            startVerticalOffset: graphMode === "vt" ? velocityViewOffset : positionViewOffset,
+            plotWidth: point.width - plot.left - plot.right,
+            plotHeight: point.height - plot.top - plot.bottom
+          };
+          canvas.style.cursor = "grabbing";
+          canvas.setPointerCapture(event.pointerId);
+          event.preventDefault();
+          return;
+        }
+        const selected = getSelectedExperiment();
+        if (!measurementStarted || capturing || !selected?.samples.length) return;
+        drag = { type: "selection", startX: point.x, startTime: timeAtX(point.x, point.width) };
+        selection = null;
+        updateAnalysis();
+        canvas.setPointerCapture(event.pointerId);
+        event.preventDefault();
+      }
+
+      function handlePointerMove(event) {
+        const point = graphPoint(event);
+        if (!drag) {
+          const axis = axisAtPoint(point);
+          canvas.style.cursor = axis === "time-scale" ? "ew-resize" : axis === "velocity-scale" ? "ns-resize" : interactionMode === "pan" && isInsidePlot(point) ? "grab" : interactionMode === "select" && measurementStarted && !capturing && getSelectedExperiment()?.samples.length ? "crosshair" : "default";
+          return;
+        }
+        if (drag.type === "time-scale") {
+          timeSpan = Math.min(120, Math.max(1, drag.initialScale * Math.exp((point.x - drag.startX) * 0.01)));
+          drawGraph();
+        } else if (drag.type === "velocity-scale") {
+          const limit = Math.min(20, Math.max(0.1, drag.initialScale * Math.exp((drag.startY - point.y) * 0.01)));
+          if (graphMode === "vt") velocityLimit = limit;
+          else positionLimit = limit;
+          drawGraph();
+        } else if (drag.type === "pan") {
+          const horizontalShift = ((point.x - drag.startX) / drag.plotWidth) * timeSpan;
+          const latestTime = Math.max(0, ...getTimelineExperiments().map((experiment) => experiment.samples.at(-1)?.time ?? 0));
+          const minimumOffset = Math.min(0, timeSpan - latestTime);
+          viewOffset = Math.max(minimumOffset, Math.min(0, drag.startOffset - horizontalShift));
+          const verticalSpan = graphMode === "vt" ? velocityLimit * 2 : positionLimit;
+          const verticalShift = ((point.y - drag.startY) / drag.plotHeight) * verticalSpan;
+          if (graphMode === "vt") velocityViewOffset = drag.startVerticalOffset + verticalShift;
+          else positionViewOffset = drag.startVerticalOffset + verticalShift;
+          drawGraph();
+        } else if (Math.abs(point.x - drag.startX) > 3) {
+          updateSelection(timeAtX(point.x, point.width));
+        }
+      }
+
+      function handlePointerUp() {
+        if (!drag) return;
+        if (drag.type === "selection" && selection) {
+          updateAnalysis();
+          setNotice("選択範囲の近似直線とR²を表示しています。");
+        }
+        drag = null;
+      }
+
+      function downloadCsv() {
+        if (!experiments.length) return;
+        const rows = ["experiment,time_s,distance_m,velocity_m_s", ...experiments.flatMap((experiment) => experiment.samples.map((sample) => `${experiment.name},${sample.time.toFixed(3)},${(sample.distance / 100).toFixed(4)},${sample.velocity.toFixed(4)}`))];
+        const blob = new Blob(["\uFEFF", rows.join("\r\n")], { type: "text/csv;charset=utf-8" });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = `motion-${new Date().toISOString().replace(/[:.]/g, "-")}.csv`;
+        link.click();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+      }
+
+      startButton.addEventListener("click", startMeasurement);
+      pauseButton.addEventListener("click", togglePause);
+      document.getElementById("reset-button").addEventListener("click", resetGraph);
+      document.getElementById("delete-experiment").addEventListener("click", deleteSelectedExperiment);
+      downloadButton.addEventListener("click", downloadCsv);
+      document.getElementById("vt-tab").addEventListener("click", () => setGraphMode("vt"));
+      document.getElementById("xt-tab").addEventListener("click", () => setGraphMode("xt"));
+      document.getElementById("pan-mode").addEventListener("click", () => setInteractionMode("pan"));
+      document.getElementById("select-mode").addEventListener("click", () => setInteractionMode("select"));
+      canvas.addEventListener("pointerdown", handlePointerDown);
+      canvas.addEventListener("pointermove", handlePointerMove);
+      canvas.addEventListener("pointerup", handlePointerUp);
+      canvas.addEventListener("pointercancel", handlePointerUp);
+      window.addEventListener("resize", resizeCanvas);
+      const canvasResizeObserver = new ResizeObserver(resizeCanvas);
+      canvasResizeObserver.observe(canvas);
+      if ("serial" in navigator) {
+        navigator.serial.addEventListener("disconnect", () => {
+          port = null;
+          capturing = false;
+          startButton.disabled = false;
+          setStartButtonLabel(experiments.length ? "次の実験を開始" : "測定開始");
+          pauseButton.disabled = true;
+          resetButton.disabled = false;
+          renderExperiments();
+          setConnection("切断", "idle");
+          setNotice("Arduinoとの接続が切れました。", true);
+        });
+      }
+      resizeCanvas();
+      renderExperiments();
+      updateReadings();
+      updateAnalysis();
+    })();
+  </script>
+</body>
+</html>
