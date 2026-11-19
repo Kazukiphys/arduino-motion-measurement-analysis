@@ -95,6 +95,9 @@
     .scales { display: grid; gap: 13px; }
     .scale-label { display: flex; justify-content: space-between; gap: 10px; margin-bottom: 5px; color: var(--muted); font-size: 11px; }
     .input-wrap { display: flex; align-items: center; gap: 7px; }
+    .sampling-rate-control { margin-bottom: 12px; }
+    .sampling-rate-input { flex: 0 1 88px; }
+    .button.sampling-rate-set { width: auto; min-width: 70px; min-height: 35px; flex: 0 0 auto; padding: 0 12px; }
     input[type="number"] {
       width: 100%; min-width: 0; height: 35px; padding: 0 9px; border: 1px solid var(--line); border-radius: 3px;
       background: white; color: var(--ink); font-family: var(--serif); font-size: 15px; font-variant-numeric: tabular-nums;
@@ -217,7 +220,7 @@
             <div class="condition-row"><dt>計測機器</dt><dd>Arduino UNO R4<br>HC-SR04</dd></div>
             <div class="condition-row"><dt>平均サンプリング間隔</dt><dd><span id="sample-interval" class="condition-value">--</span> <span class="unit">\(\mathrm{ms}\)</span></dd></div>
             <div class="condition-row"><dt>実測サンプリングレート</dt><dd><span id="sample-rate" class="condition-value">--</span> <span class="unit">\(\mathrm{Hz}\)</span></dd></div>
-            <div class="condition-row"><dt>スケッチ内 delay</dt><dd>10 <span class="unit">\(\mathrm{ms}\)</span></dd></div>
+            <div class="condition-row"><dt>レート設定範囲</dt><dd>1–100 <span class="unit">\(\mathrm{Hz}\)</span></dd></div>
             <div class="condition-row"><dt>シリアル通信</dt><dd>9600 baud</dd></div>
             <div class="condition-row"><dt>配線（Trig / Echo）</dt><dd>D4 / D3</dd></div>
             <div class="condition-row"><dt>速度の算出</dt><dd>加重移動平均<br>＋3点最小二乗</dd></div>
@@ -229,6 +232,15 @@
       <aside class="side-panel" aria-label="測定操作と表示設定">
         <section class="side-section">
           <h2 class="side-title">MEASUREMENT</h2>
+          <div class="sampling-rate-control">
+            <label class="scale-label" for="sampling-rate-input"><span>サンプリングレート</span><span>1–100 Hz</span></label>
+            <div class="input-wrap rate-input-row">
+              <input id="sampling-rate-input" class="sampling-rate-input" type="number" min="1" max="100" step="1" value="30" inputmode="numeric" aria-describedby="sampling-rate-help">
+              <span class="unit">\(\mathrm{Hz}\)</span>
+              <button id="sampling-rate-set" class="button sampling-rate-set" type="button" title="入力したレートを設定して測定を開始">設定</button>
+            </div>
+            <p id="sampling-rate-help" class="notice">初期値は30 Hzです。通常は「測定開始」、レート変更時のみ数値を入力して「設定」を押してください。</p>
+          </div>
           <div class="controls">
             <button id="start-button" class="button" type="button" title="シリアルポートを選び測定を開始">
               <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.8v10.4L13 8z"/></svg>測定開始
@@ -287,6 +299,9 @@
       const pauseButton = document.getElementById("pause-button");
       const downloadButton = document.getElementById("download-button");
       const resetButton = document.getElementById("reset-button");
+      const samplingRateInput = document.getElementById("sampling-rate-input");
+      const samplingRateSetButton = document.getElementById("sampling-rate-set");
+      const samplingRateHelp = document.getElementById("sampling-rate-help");
       const experimentList = document.getElementById("experiment-list");
       const experiments = [];
       const colors = ["#146b50", "#dc713d", "#4176a5", "#a34e62", "#7a6a2f", "#6a5ca3"];
@@ -294,6 +309,7 @@
       const sampleIntervalWindowSize = 100;
       const sampleIntervals = [];
       let port = null;
+      let pendingSamplingRate = null;
       let reading = false;
       let capturing = false;
       let measurementStarted = false;
@@ -306,7 +322,7 @@
       let lastDistance = null;
       let timeSpan = 10;
       let velocityLimit = 2;
-      let positionLimit = 3;
+      let positionLimit = 1.0;
       let graphMode = "xt";
       let interactionMode = "select";
       let viewOffset = 0;
@@ -327,6 +343,53 @@
 
       function setStartButtonLabel(label) {
         startButton.innerHTML = `<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.8v10.4L13 8z"/></svg>${label}`;
+      }
+
+      function finishSamplingRateRequest(error) {
+        const pending = pendingSamplingRate;
+        if (!pending) return;
+        pendingSamplingRate = null;
+        clearTimeout(pending.timeout);
+        clearTimeout(pending.retry);
+        if (error) pending.reject(error);
+        else pending.resolve();
+      }
+
+      async function sendSamplingRate(pending) {
+        if (pendingSamplingRate !== pending) return;
+        try {
+          if (!port?.writable) throw new Error("シリアルポートに書き込めません。");
+          const writer = port.writable.getWriter();
+          try {
+            await writer.write(new TextEncoder().encode(`RATE,${pending.rate}\n`));
+            pending.attempts++;
+          } finally {
+            writer.releaseLock();
+          }
+          if (pendingSamplingRate === pending) {
+            pending.retry = setTimeout(() => void sendSamplingRate(pending), 500);
+          }
+        } catch (error) {
+          if (pendingSamplingRate === pending) {
+            finishSamplingRateRequest(new Error(`設定の送信に失敗しました: ${error.message}`));
+          }
+        }
+      }
+
+      function requestSamplingRate(rate) {
+        return new Promise((resolve, reject) => {
+          const pending = { rate, resolve, reject, attempts: 0, timeout: null, retry: null };
+          pending.timeout = setTimeout(() => {
+            if (pendingSamplingRate !== pending) return;
+            const detail = pending.attempts
+              ? "設定を送信しましたが、Arduinoから確認が返りませんでした。"
+              : "設定の送信が完了しませんでした。";
+            finishSamplingRateRequest(new Error(`${detail}接続とスケッチを確認してください。`));
+          }, 5000);
+          pendingSamplingRate = pending;
+          samplingRateHelp.textContent = "Arduinoへ設定を送信中です。";
+          void sendSamplingRate(pending);
+        });
       }
 
       function updateSamplingReadings() {
@@ -358,6 +421,7 @@
           toggle.setAttribute("aria-label", `${experiment.name}をグラフに表示`);
           toggle.addEventListener("change", () => {
             experiment.graphVisible = toggle.checked;
+            if (toggle.checked) expandVisibleSamplingRanges();
             renderLegend();
             drawGraph();
           });
@@ -423,6 +487,7 @@
 
       function setGraphMode(mode) {
         graphMode = mode;
+        expandVisibleSamplingRanges();
         const isVelocity = mode === "vt";
         document.getElementById("vt-tab").setAttribute("aria-selected", String(isVelocity));
         document.getElementById("xt-tab").setAttribute("aria-selected", String(!isVelocity));
@@ -496,6 +561,29 @@
 
       function getVisibleExperiments() {
         return experiments.filter((experiment) => experiment.graphVisible);
+      }
+
+      function expandSamplingRanges(sample) {
+        const position = sample.distance / 100;
+        const positionMargin = Math.max(positionLimit * 0.05, 0.01);
+        if (position > positionViewOffset + positionLimit) {
+          positionLimit = position - positionViewOffset + positionMargin;
+        } else if (position < positionViewOffset) {
+          const newOffset = position - positionMargin;
+          positionLimit += positionViewOffset - newOffset;
+          positionViewOffset = newOffset;
+        }
+
+        const velocityDistance = Math.abs(sample.velocity - velocityViewOffset);
+        if (velocityDistance > velocityLimit) {
+          velocityLimit = velocityDistance + Math.max(velocityLimit * 0.05, 0.01);
+        }
+      }
+
+      function expandVisibleSamplingRanges() {
+        for (const experiment of getVisibleExperiments()) {
+          for (const sample of experiment.samples) expandSamplingRanges(sample);
+        }
       }
 
       function getTimelineExperiments() {
@@ -649,10 +737,14 @@
         context.restore();
       }
 
+      function formatElapsedTime(timeMicros) {
+        return `${Math.floor(timeMicros / 1000000)}.${String(timeMicros % 1000000).padStart(6, "0")}`;
+      }
+
       function updateReadings() {
         const selected = getSelectedExperiment();
         const latest = selected?.samples.at(-1) ?? null;
-        document.getElementById("live-time").textContent = latest ? latest.time.toFixed(2) : "--";
+        document.getElementById("live-time").textContent = latest ? formatElapsedTime(latest.timeMicros) : "--";
         document.getElementById("live-velocity").textContent = latest ? latest.velocity.toFixed(2) : "--";
         document.getElementById("live-distance").textContent = latest ? latest.distance.toFixed(1) : "--";
       }
@@ -715,9 +807,31 @@
       }
 
       function handleLine(line) {
-        const values = line.trim().split(",").map(Number);
+        const trimmedLine = line.trim();
+        if (trimmedLine.startsWith("READY,")) {
+          return;
+        }
+        if (trimmedLine.startsWith("RATE_SET,")) {
+          const rate = Number(trimmedLine.slice("RATE_SET,".length));
+          if (Number.isFinite(rate) && pendingSamplingRate?.rate === rate) {
+            sampleIntervals.length = 0;
+            lastDeviceTimestamp = null;
+            document.getElementById("sample-interval").textContent = "--";
+            document.getElementById("sample-rate").textContent = "--";
+            samplingRateHelp.textContent = `Arduinoに${rate} Hzを設定しました。`;
+            finishSamplingRateRequest();
+          }
+          return;
+        }
+        const fields = trimmedLine.split(",");
+        const values = fields.map(Number);
         if (values.length < 3 || !values.slice(0, 3).every(Number.isFinite)) return;
-        const [deviceTime, distance, velocity] = values;
+        const timestamp = /^(\d+)(?:\.(\d{1,6}))?$/.exec(fields[0]);
+        if (!timestamp) return;
+        const deviceTimeMicros = Number(timestamp[1]) * 1000000 + Number((timestamp[2] ?? "").padEnd(6, "0"));
+        if (!Number.isSafeInteger(deviceTimeMicros)) return;
+        const deviceTime = deviceTimeMicros / 1000000;
+        const [, distance, velocity] = values;
         if (lastDeviceTimestamp !== null) {
           const interval = (deviceTime - lastDeviceTimestamp) * 1000;
           if (interval > 0) {
@@ -728,11 +842,13 @@
         }
         lastDeviceTimestamp = deviceTime;
         if (!capturing || !activeExperiment) return;
-        if (activeExperiment.originTime === null) activeExperiment.originTime = deviceTime;
-        const time = Math.max(0, deviceTime - activeExperiment.originTime);
+        if (activeExperiment.originTimeMicros === null) activeExperiment.originTimeMicros = deviceTimeMicros;
+        const timeMicros = Math.max(0, deviceTimeMicros - activeExperiment.originTimeMicros);
+        const time = timeMicros / 1000000;
         const samples = activeExperiment.samples;
         if (samples.length && time < samples[samples.length - 1].time) return;
-        samples.push({ time, distance, velocity });
+        samples.push({ time, timeMicros, distance, velocity });
+        if (activeExperiment.graphVisible) expandSamplingRanges(samples[samples.length - 1]);
         lastTime = time;
         lastVelocity = velocity;
         lastDistance = distance;
@@ -763,13 +879,16 @@
             }
           }
         } catch (error) {
+          finishSamplingRateRequest(new Error(`シリアル通信に失敗しました: ${error.message}`));
           setConnection("接続エラー", "error");
           setNotice(`シリアル通信に失敗しました: ${error.message}`, true);
         } finally {
           reading = false;
           if (!port?.readable) {
+            finishSamplingRateRequest(new Error("Arduinoとの接続が切れました。"));
             capturing = false;
             startButton.disabled = false;
+            samplingRateSetButton.disabled = false;
             setStartButtonLabel(experiments.length ? "次の実験を開始" : "測定開始");
             pauseButton.disabled = true;
             resetButton.disabled = false;
@@ -780,25 +899,38 @@
         }
       }
 
-      async function startMeasurement() {
+      async function startMeasurement(requestedRate = null) {
         if (!("serial" in navigator)) {
           setNotice("Web Serialに対応したChromeまたはEdgeで開いてください。", true);
           return;
         }
+        if (requestedRate !== null &&
+            (!Number.isInteger(requestedRate) || requestedRate < 1 || requestedRate > 100)) {
+          setNotice("サンプリングレートは1〜100 Hzの整数で指定してください。", true);
+          return;
+        }
+        const wasPauseDisabled = pauseButton.disabled;
         startButton.disabled = true;
+        samplingRateSetButton.disabled = true;
+        pauseButton.disabled = true;
         try {
           if (!port) {
             port = await navigator.serial.requestPort();
             await port.open({ baudRate: 9600 });
             setConnection("接続中 · 9600 baud", "connected");
-            readPort();
           }
+          const samplingRateConfigured = requestedRate === null
+            ? Promise.resolve()
+            : requestSamplingRate(requestedRate);
+          readPort();
+          await samplingRateConfigured;
           const number = nextExperimentNumber++;
-          activeExperiment = { id: number, name: `実験${number}`, color: colors[(number - 1) % colors.length], samples: [], originTime: null, graphVisible: true };
+          activeExperiment = { id: number, name: `実験${number}`, color: colors[(number - 1) % colors.length], samples: [], originTimeMicros: null, graphVisible: true };
           viewOffset = 0;
           velocityViewOffset = 0;
           positionViewOffset = 0;
           experiments.push(activeExperiment);
+          expandVisibleSamplingRanges();
           selectedExperimentId = activeExperiment.id;
           selection = null;
           lastTime = 0;
@@ -816,7 +948,12 @@
           setNotice("測定中です。センサの前で物体を動かしてください。");
         } catch (error) {
           startButton.disabled = false;
-          if (error.name !== "NotFoundError") setNotice(`ポートを開けませんでした: ${error.message}`, true);
+          samplingRateSetButton.disabled = false;
+          pauseButton.disabled = !port?.readable || wasPauseDisabled;
+          if (requestedRate !== null) {
+            samplingRateHelp.textContent = "設定を確認できませんでした。もう一度「設定」を押してください。";
+          }
+          if (error.name !== "NotFoundError") setNotice(`測定を開始できませんでした: ${error.message}`, true);
         }
       }
 
@@ -830,6 +967,7 @@
           setNotice("一時停止中です。グラフ上をドラッグして解析区間を選べます。");
         }
         startButton.disabled = capturing;
+        samplingRateSetButton.disabled = capturing;
         setStartButtonLabel(experiments.length ? "次の実験を開始" : "測定開始");
         resetButton.disabled = capturing;
         renderExperiments();
@@ -989,7 +1127,20 @@
 
       function downloadCsv() {
         if (!experiments.length) return;
-        const rows = ["experiment,time_s,distance_m,velocity_m_s", ...experiments.flatMap((experiment) => experiment.samples.map((sample) => `${experiment.name},${sample.time.toFixed(3)},${(sample.distance / 100).toFixed(4)},${sample.velocity.toFixed(4)}`))];
+        const headers = experiments.flatMap((experiment) =>
+          ["time[s]", "distance[m]", "velocity[m/s]"].map((field) => `${experiment.name}_${field}`)
+        );
+        const rows = [headers.join(",")];
+        const sampleCount = experiments.reduce((maximum, experiment) => Math.max(maximum, experiment.samples.length), 0);
+        for (let index = 0; index < sampleCount; index++) {
+          const cells = experiments.flatMap((experiment) => {
+            const sample = experiment.samples[index];
+            return sample
+              ? [formatElapsedTime(sample.timeMicros), (sample.distance / 100).toFixed(4), sample.velocity.toFixed(4)]
+              : ["", "", ""];
+          });
+          rows.push(cells.join(","));
+        }
         const blob = new Blob(["\uFEFF", rows.join("\r\n")], { type: "text/csv;charset=utf-8" });
         const url = URL.createObjectURL(blob);
         const link = document.createElement("a");
@@ -999,7 +1150,15 @@
         setTimeout(() => URL.revokeObjectURL(url), 1000);
       }
 
-      startButton.addEventListener("click", startMeasurement);
+      startButton.addEventListener("click", () => void startMeasurement());
+      samplingRateSetButton.addEventListener("click", () => {
+        const rate = Number(samplingRateInput.value);
+        if (!Number.isInteger(rate) || rate < 1 || rate > 100) {
+          setNotice("サンプリングレートは1〜100 Hzの整数で指定してください。", true);
+          return;
+        }
+        void startMeasurement(rate);
+      });
       pauseButton.addEventListener("click", togglePause);
       document.getElementById("reset-button").addEventListener("click", resetGraph);
       document.getElementById("delete-experiment").addEventListener("click", deleteSelectedExperiment);
@@ -1018,8 +1177,10 @@
       if ("serial" in navigator) {
         navigator.serial.addEventListener("disconnect", () => {
           port = null;
+          finishSamplingRateRequest(new Error("Arduinoとの接続が切れました。"));
           capturing = false;
           startButton.disabled = false;
+          samplingRateSetButton.disabled = false;
           setStartButtonLabel(experiments.length ? "次の実験を開始" : "測定開始");
           pauseButton.disabled = true;
           resetButton.disabled = false;

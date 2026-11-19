@@ -5,9 +5,20 @@
   Board: Arduino Uno R4
 */
 
+#include <stdlib.h>
+#include <string.h>
+
 // ===== 超音波センサのピン設定 =====
 const int echoPin = 3;
 const int trigPin = 4;
+const unsigned int minimumSamplingRateHz = 1;
+const unsigned int maximumSamplingRateHz = 100;
+
+unsigned int samplingRateHz = 30;
+bool samplingRateConfigured = false;
+char serialCommandBuffer[20];
+size_t serialCommandLength = 0;
+unsigned long lastReadyTime = 0;
 
 void setup() {
 
@@ -15,26 +26,40 @@ void setup() {
 
   pinMode(echoPin, INPUT);
   pinMode(trigPin, OUTPUT);
+
+  Serial.print("READY,");
+  Serial.println(samplingRateHz);
+  lastReadyTime = millis();
 }
 
 void loop() {
 
-  // ===== 経過時間 =====
-  static unsigned long startTime = millis();
+  processSerialCommands();
+  if (!samplingRateConfigured && millis() - lastReadyTime >= 500) {
+    Serial.print("READY,");
+    Serial.println(samplingRateHz);
+    lastReadyTime = millis();
+  }
+
+  static unsigned long previousSampleTime = 0;
+  static bool hasPreviousSample = false;
+  static uint64_t elapsedMicros = 0;
+  unsigned long sampleIntervalMicros = 1000000UL / samplingRateHz;
+  while (hasPreviousSample &&
+         (unsigned long)(micros() - previousSampleTime) < sampleIntervalMicros) {
+    processSerialCommands();
+    sampleIntervalMicros = 1000000UL / samplingRateHz;
+  }
 
   // ===== サンプリング時間管理 =====
-  static unsigned long prevTime = 0;
-
   unsigned long nowTime = micros();
+  unsigned long elapsedSincePrevious = hasPreviousSample ? nowTime - previousSampleTime : 0;
+  elapsedMicros += elapsedSincePrevious;
 
   float time_interval =
-      (nowTime - prevTime) / 1000.0;   // ms
-
-  prevTime = nowTime;
-
-  // ===== 現在時刻[s] =====
-  float t =
-      (millis() - startTime) / 1000.0;
+      hasPreviousSample ? elapsedSincePrevious / 1000.0 : 1000.0 / samplingRateHz;   // ms
+  previousSampleTime = nowTime;
+  hasPreviousSample = true;
 
   // ===== 距離履歴 =====
   static float kyori1 = 0;
@@ -106,7 +131,15 @@ void loop() {
   // ===== シリアル出力 =====
   // 時間[s], 距離[cm], 速度[m/s]
 
-  Serial.print(t);
+  unsigned long elapsedSeconds = elapsedMicros / 1000000ULL;
+  unsigned long microsecondPart = elapsedMicros % 1000000ULL;
+  Serial.print(elapsedSeconds);
+  Serial.print(".");
+  for (unsigned long place = 100000; place > 1; place /= 10) {
+    if (microsecondPart < place) Serial.print("0");
+    else break;
+  }
+  Serial.print(microsecondPart);
   Serial.print(",");
 
   Serial.print(smoothrange);
@@ -123,7 +156,34 @@ void loop() {
   smoothkyori2 = smoothkyori1;
   smoothkyori1 = smoothrange;
 
-  delay(10);
+}
+
+void processSerialCommands() {
+  while (Serial.available() > 0) {
+    const char character = Serial.read();
+    if (character == '\r') continue;
+
+    if (character == '\n') {
+      serialCommandBuffer[serialCommandLength] = '\0';
+      if (strncmp(serialCommandBuffer, "RATE,", 5) == 0) {
+        char* end = nullptr;
+        const long requestedRate = strtol(serialCommandBuffer + 5, &end, 10);
+        if (*end == '\0' &&
+            requestedRate >= minimumSamplingRateHz &&
+            requestedRate <= maximumSamplingRateHz) {
+          samplingRateHz = requestedRate;
+          samplingRateConfigured = true;
+          Serial.print("RATE_SET,");
+          Serial.println(samplingRateHz);
+        }
+      }
+      serialCommandLength = 0;
+    } else if (serialCommandLength < sizeof(serialCommandBuffer) - 1) {
+      serialCommandBuffer[serialCommandLength++] = character;
+    } else {
+      serialCommandLength = 0;
+    }
+  }
 }
 
 // ===== 距離測定関数 =====
@@ -138,7 +198,7 @@ float readDistance() {
   digitalWrite(trigPin, LOW);
 
   float distance =
-      pulseIn(echoPin, HIGH) / 58.0;
+      pulseIn(echoPin, HIGH, 30000UL) / 58.0;
 
   return distance;
 }
