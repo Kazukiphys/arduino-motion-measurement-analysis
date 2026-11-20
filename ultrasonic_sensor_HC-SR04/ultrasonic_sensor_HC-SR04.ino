@@ -3,6 +3,14 @@
   x-t graph and v-t graph output version
 
   Board: Arduino Uno R4
+
+  配線（HC-SR04 → Arduino UNO R4）:
+    VCC  → 5V（3.3Vではありません）
+    GND  → GND
+    Trig → D4
+    Echo → D3
+
+  Arduino本体はUSB-Cから5Vで給電してください。
 */
 
 #include <stdlib.h>

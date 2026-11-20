@@ -56,7 +56,7 @@
     .connection::before { width: 8px; height: 8px; border-radius: 50%; background: #aab2aa; content: ""; }
     .connection[data-state="connected"]::before { background: #30966d; box-shadow: 0 0 0 3px #d7eee3; }
     .connection[data-state="error"]::before { background: var(--orange); }
-    main { display: grid; grid-template-columns: minmax(0, 1fr) 260px; gap: 20px; margin-top: 22px; align-items: stretch; }
+    main { display: grid; grid-template-columns: minmax(0, 1fr) 260px; gap: 20px; margin-top: 22px; align-items: start; }
     .graph-panel, .side-panel { border: 1px solid var(--line); background: var(--panel); }
     .graph-panel { display: grid; min-width: 0; grid-template-rows: auto auto minmax(310px, 1fr) auto; padding: 20px 20px 14px; }
     .primary-column { display: grid; min-width: 0; min-height: 0; grid-template-rows: minmax(0, 1fr) auto; gap: 16px; }
@@ -254,6 +254,13 @@
             <button id="download-button" class="button secondary" type="button" disabled title="測定データをCSVで保存">
               <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M7 2h2v6.2l2.1-2.1 1.4 1.4L8 12 3.5 7.5l1.4-1.4L7 8.2zM3 12h10v2H3z"/></svg>CSVを書き出す
             </button>
+            <button id="export-json-button" class="button secondary" type="button" disabled title="測定結果をJSONで保存">
+              <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M7 2h2v6.2l2.1-2.1 1.4 1.4L8 12 3.5 7.5l1.4-1.4L7 8.2zM3 12h10v2H3z"/></svg>JSONを保存
+            </button>
+            <button id="import-json-button" class="button secondary" type="button" title="JSONから測定結果を読み込む">
+              <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5 13h6v2H5zm0-6h6v2H5zm0-6h6v2H5z"/></svg>JSONから復元
+            </button>
+            <input id="json-import-input" type="file" accept=".json" style="display: none;">
           </div>
           <p id="notice" class="notice" role="status">測定開始を押してArduinoのポートを選択してください。</p>
         </section>
@@ -448,6 +455,7 @@
         document.getElementById("delete-experiment").disabled = !selected || capturing;
         document.getElementById("sample-count").textContent = `${experiments.length} 実験`;
         downloadButton.disabled = !experiments.some((experiment) => experiment.samples.length);
+        document.getElementById("export-json-button").disabled = !experiments.some((experiment) => experiment.samples.length);
         renderLegend();
       }
 
@@ -524,8 +532,10 @@
         const equationLabel = document.getElementById("analysis-equation");
         const rSquaredLabel = document.getElementById("analysis-r-squared");
         const areaLabel = document.getElementById("analysis-area");
-        const selected = getSelectedExperiment();
-        const data = selected?.samples ?? [];
+        
+        const visibleExperiments = getVisibleExperiments();
+        const data = visibleExperiments.length === 1 ? visibleExperiments[0].samples : [];
+        
         if (!selection) {
           rangeLabel.textContent = "未選択";
           equationLabel.textContent = "--";
@@ -711,8 +721,9 @@
           context.fillStyle = experiment.color;
           context.fill();
         }
-        if (selection) {
-          context.strokeStyle = "#dc713d";
+        if (selection && visibleExperiments.length === 1) {
+          const experimentColor = visibleExperiments[0].color;
+          context.strokeStyle = experimentColor;
           context.lineWidth = 1;
           for (const x of [xFor(selection.start), xFor(selection.end)]) {
             context.beginPath();
@@ -721,11 +732,31 @@
             context.stroke();
           }
         }
-        const fit = selection && selected?.graphVisible ? analyzeRange(selection.start, selection.end, selected.samples) : null;
+        const fitData = selection && visibleExperiments.length === 1 ? visibleExperiments[0].samples : null;
+        const fit = selection && fitData ? analyzeRange(selection.start, selection.end, fitData) : null;
         const fitStart = Math.max(selection?.start ?? 0, startTime);
         const fitEnd = Math.min(selection?.end ?? 0, endTime);
-        if (fit && fitEnd > fitStart) {
-          context.strokeStyle = "#dc713d";
+        if (fit && fitEnd > fitStart && visibleExperiments.length === 1) {
+          const experimentColor = visibleExperiments[0].color;
+          
+          if (graphMode === "vt") {
+            const areaColor = experimentColor + "33";
+            context.fillStyle = areaColor;
+            context.beginPath();
+            context.moveTo(xFor(fitStart), plot.top + plotHeight);
+            const points = [
+              { time: fitStart, value: fit.slope * fitStart + fit.intercept },
+              ...fitData.filter((sample) => sample.time >= fitStart && sample.time <= fitEnd).map((sample) => ({ time: sample.time, value: graphValue(sample) })),
+              { time: fitEnd, value: fit.slope * fitEnd + fit.intercept }
+            ];
+            for (const point of points) {
+              context.lineTo(xFor(point.time), yFor(point.value));
+            }
+            context.lineTo(xFor(fitEnd), plot.top + plotHeight);
+            context.fill();
+          }
+          
+          context.strokeStyle = experimentColor;
           context.lineWidth = 2;
           context.setLineDash([6, 4]);
           context.beginPath();
@@ -1041,7 +1072,25 @@
 
       function updateSelection(time) {
         if (!drag) return;
-        const data = getSelectedExperiment()?.samples ?? [];
+        const visibleExperiments = getVisibleExperiments();
+        
+        if (visibleExperiments.length === 0) {
+          selection = null;
+          updateAnalysis();
+          drawGraph();
+          return;
+        }
+        
+        if (visibleExperiments.length > 1) {
+          setNotice("複数の実験が表示されています。範囲指定には1つだけチェックしてください。", true);
+          selection = null;
+          updateAnalysis();
+          drawGraph();
+          return;
+        }
+        
+        const targetExperiment = visibleExperiments[0];
+        const data = targetExperiment?.samples ?? [];
         const firstTime = data[0]?.time ?? time;
         const lastSampleTime = data[data.length - 1]?.time ?? time;
         const start = Math.max(firstTime, Math.min(lastSampleTime, Math.min(drag.startTime, time)));
@@ -1077,8 +1126,21 @@
           event.preventDefault();
           return;
         }
-        const selected = getSelectedExperiment();
-        if (!measurementStarted || capturing || !selected?.samples.length) return;
+        const visibleExperiments = getVisibleExperiments();
+        
+        if (!measurementStarted || capturing) {
+          return;
+        }
+        
+        if (visibleExperiments.length === 0 || !visibleExperiments.some((exp) => exp.samples.length)) {
+          return;
+        }
+        
+        if (visibleExperiments.length > 1) {
+          setNotice("複数の実験が表示されています。範囲指定には1つだけチェックしてください。", true);
+          return;
+        }
+        
         drag = { type: "selection", startX: point.x, startTime: timeAtX(point.x, point.width) };
         selection = null;
         updateAnalysis();
@@ -1090,7 +1152,9 @@
         const point = graphPoint(event);
         if (!drag) {
           const axis = axisAtPoint(point);
-          canvas.style.cursor = axis === "time-scale" ? "ew-resize" : axis === "velocity-scale" ? "ns-resize" : interactionMode === "pan" && isInsidePlot(point) ? "grab" : interactionMode === "select" && measurementStarted && !capturing && getSelectedExperiment()?.samples.length ? "crosshair" : "default";
+          const visibleExperiments = getVisibleExperiments();
+          const canSelect = interactionMode === "select" && measurementStarted && !capturing && visibleExperiments.length === 1 && visibleExperiments[0]?.samples.length;
+          canvas.style.cursor = axis === "time-scale" ? "ew-resize" : axis === "velocity-scale" ? "ns-resize" : interactionMode === "pan" && isInsidePlot(point) ? "grab" : canSelect ? "crosshair" : "default";
           return;
         }
         if (drag.type === "time-scale") {
@@ -1150,6 +1214,101 @@
         setTimeout(() => URL.revokeObjectURL(url), 1000);
       }
 
+      function exportToJson() {
+        if (!experiments.length) return;
+        const data = {
+          version: 1,
+          timestamp: new Date().toISOString(),
+          experiments: experiments.map((exp) => ({
+            id: exp.id,
+            name: exp.name,
+            color: exp.color,
+            graphVisible: exp.graphVisible,
+            samples: exp.samples
+          })),
+          state: {
+            nextExperimentNumber,
+            selectedExperimentId,
+            graphMode,
+            interactionMode,
+            timeSpan,
+            velocityLimit,
+            positionLimit,
+            viewOffset,
+            velocityViewOffset,
+            positionViewOffset,
+            measurementStarted
+          }
+        };
+        const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json;charset=utf-8" });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = `motion-${new Date().toISOString().replace(/[:.]/g, "-")}.json`;
+        link.click();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+        setNotice("JSONファイルを保存しました。");
+      }
+
+      function importFromJson(file) {
+        const reader = new FileReader();
+        reader.onload = (event) => {
+          try {
+            const data = JSON.parse(event.target.result);
+            if (!data.experiments || !Array.isArray(data.experiments)) {
+              setNotice("無効なJSONファイルです。", true);
+              return;
+            }
+            if (capturing) {
+              setNotice("測定中はJSONファイルを読み込めません。先に一時停止してください。", true);
+              return;
+            }
+            experiments.length = 0;
+            experiments.push(...data.experiments.map((exp) => ({
+              ...exp,
+              samples: exp.samples || []
+            })));
+
+            if (data.state) {
+              nextExperimentNumber = data.state.nextExperimentNumber ?? Math.max(0, ...experiments.map((e) => e.id)) + 1;
+              selectedExperimentId = data.state.selectedExperimentId ?? (experiments.length ? experiments[0].id : null);
+              graphMode = data.state.graphMode ?? "xt";
+              interactionMode = data.state.interactionMode ?? "select";
+              timeSpan = data.state.timeSpan ?? 10;
+              velocityLimit = data.state.velocityLimit ?? 5;
+              positionLimit = data.state.positionLimit ?? 2;
+              viewOffset = data.state.viewOffset ?? 0;
+              velocityViewOffset = data.state.velocityViewOffset ?? 0;
+              positionViewOffset = data.state.positionViewOffset ?? 0;
+              measurementStarted = data.state.measurementStarted ?? true;
+            } else {
+              selectedExperimentId = experiments.length ? experiments[0].id : null;
+              measurementStarted = true;
+            }
+
+            selection = null;
+            const latest = experiments.flatMap((e) => e.samples).pop();
+            lastTime = latest?.time ?? 0;
+            lastVelocity = latest?.velocity ?? null;
+            lastDistance = latest?.distance ?? null;
+
+            setGraphMode(graphMode);
+            setInteractionMode(interactionMode);
+            renderExperiments();
+            updateReadings();
+            updateAnalysis();
+            drawGraph();
+            setNotice(`${experiments.length} 個の実験データを読み込みました。`);
+          } catch (error) {
+            setNotice(`JSONファイルの読み込みに失敗しました: ${error.message}`, true);
+          }
+        };
+        reader.onerror = () => {
+          setNotice("ファイルの読み込みに失敗しました。", true);
+        };
+        reader.readAsText(file);
+      }
+
       startButton.addEventListener("click", () => void startMeasurement());
       samplingRateSetButton.addEventListener("click", () => {
         const rate = Number(samplingRateInput.value);
@@ -1163,6 +1322,16 @@
       document.getElementById("reset-button").addEventListener("click", resetGraph);
       document.getElementById("delete-experiment").addEventListener("click", deleteSelectedExperiment);
       downloadButton.addEventListener("click", downloadCsv);
+      document.getElementById("export-json-button").addEventListener("click", exportToJson);
+      document.getElementById("import-json-button").addEventListener("click", () => {
+        document.getElementById("json-import-input").click();
+      });
+      document.getElementById("json-import-input").addEventListener("change", (event) => {
+        if (event.target.files?.length) {
+          importFromJson(event.target.files[0]);
+          event.target.value = "";
+        }
+      });
       document.getElementById("vt-tab").addEventListener("click", () => setGraphMode("vt"));
       document.getElementById("xt-tab").addEventListener("click", () => setGraphMode("xt"));
       document.getElementById("pan-mode").addEventListener("click", () => setInteractionMode("pan"));
