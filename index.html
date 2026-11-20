@@ -36,6 +36,7 @@
     button { cursor: pointer; }
     .app { max-width: 1240px; margin: 0 auto; padding: 28px 34px 36px; }
     header {
+      position: relative;
       display: flex;
       align-items: flex-end;
       justify-content: space-between;
@@ -52,6 +53,7 @@
     }
     h1 { margin: 0; font-family: var(--serif); font-size: 31px; font-weight: 500; }
     .subtitle { margin: 6px 0 0; color: var(--muted); font-size: 13px; }
+    .byline { position: absolute; top: 0; right: 0; color: var(--muted); font-family: var(--serif); font-size: 12px; font-style: italic; }
     .connection { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; white-space: nowrap; }
     .connection::before { width: 8px; height: 8px; border-radius: 50%; background: #aab2aa; content: ""; }
     .connection[data-state="connected"]::before { background: #30966d; box-shadow: 0 0 0 3px #d7eee3; }
@@ -185,6 +187,7 @@
         <h1>運動の測定</h1>
         <p class="subtitle">超音波センサによる速度の記録</p>
       </div>
+      <span class="byline">by K.kitaoka</span>
       <div id="connection" class="connection" data-state="idle" role="status">未接続</div>
     </header>
 
@@ -573,6 +576,10 @@
         return experiments.filter((experiment) => experiment.graphVisible);
       }
 
+      function clampVelocityViewOffset() {
+        velocityViewOffset = Math.max(-velocityLimit, Math.min(velocityLimit, velocityViewOffset));
+      }
+
       function expandSamplingRanges(sample) {
         const position = sample.distance / 100;
         const positionMargin = Math.max(positionLimit * 0.05, 0.01);
@@ -649,8 +656,13 @@
           context.moveTo(plot.left, y);
           context.lineTo(width - plot.right, y);
           context.stroke();
-          context.fillText(value.toFixed(verticalMaximum < 1 ? 2 : 1), plot.left - 8, y);
+          const label = value.toFixed(verticalMaximum < 1 ? 2 : 1);
+          if (graphMode !== "vt" || (Math.abs(y - yFor(0)) >= 14 && Number(label) !== 0)) {
+            context.fillText(label, plot.left - 8, y);
+          }
         }
+
+        if (graphMode === "vt") context.fillText("0", plot.left - 8, yFor(0));
 
         for (let index = 0; index <= 5; index++) {
           const time = startTime + timeSpan * index / 5;
@@ -678,37 +690,36 @@
         context.beginPath();
         context.rect(plot.left, plot.top, plotWidth, plotHeight);
         context.clip();
-        const selected = getSelectedExperiment();
-        if (selection && selected?.graphVisible) {
-          const startValue = velocityAt(selection.start, selected.samples);
-          const endValue = velocityAt(selection.end, selected.samples);
-          if (startValue !== null && endValue !== null) {
-            const areaPoints = [
-              { time: selection.start, value: startValue },
-              ...selected.samples
-                .filter((sample) => sample.time > selection.start && sample.time < selection.end)
-                .map((sample) => ({ time: sample.time, value: valueFor(sample) })),
-              { time: selection.end, value: endValue }
-            ].map((point) => ({ x: xFor(point.time), y: yFor(point.value) }));
+        if (graphMode === "vt" && selection && visibleExperiments.length === 1) {
+          const areaPoints = rangePoints(selection.start, selection.end, visibleExperiments[0].samples);
+          if (areaPoints) {
             context.beginPath();
-            context.moveTo(areaPoints[0].x, yFor(0));
-            context.lineTo(areaPoints[0].x, areaPoints[0].y);
-            appendSmoothCurve(areaPoints);
-            context.lineTo(areaPoints[areaPoints.length - 1].x, yFor(0));
+            context.moveTo(xFor(areaPoints[0].time), yFor(0));
+            for (const point of areaPoints) context.lineTo(xFor(point.time), yFor(point.value));
+            context.lineTo(xFor(areaPoints[areaPoints.length - 1].time), yFor(0));
             context.closePath();
-            context.fillStyle = "rgba(220, 113, 61, 0.22)";
+            context.save();
+            context.fillStyle = visibleExperiments[0].color;
+            context.globalAlpha = 0.22;
             context.fill();
+            context.restore();
           }
         }
         for (const experiment of visibleExperiments) {
           const radius = experiment.id === selectedExperimentId ? 3 : 2.2;
           const points = experiment.samples
-            .filter((sample) => sample.time >= startTime && sample.time <= endTime)
+            .filter((sample, index, samples) =>
+              (sample.time >= startTime && sample.time <= endTime) ||
+              (graphMode === "vt" && sample.time < startTime && samples[index + 1]?.time >= startTime) ||
+              (graphMode === "vt" && sample.time > endTime && samples[index - 1]?.time <= endTime)
+            )
             .map((sample) => ({ x: xFor(sample.time), y: yFor(valueFor(sample)) }));
           if (points.length > 1) {
             context.beginPath();
             context.moveTo(points[0].x, points[0].y);
-            appendSmoothCurve(points);
+            if (graphMode === "vt") {
+              for (const point of points.slice(1)) context.lineTo(point.x, point.y);
+            } else appendSmoothCurve(points);
             context.strokeStyle = experiment.color;
             context.lineWidth = experiment.id === selectedExperimentId ? 1.8 : 1.2;
             context.stroke();
@@ -738,24 +749,6 @@
         const fitEnd = Math.min(selection?.end ?? 0, endTime);
         if (fit && fitEnd > fitStart && visibleExperiments.length === 1) {
           const experimentColor = visibleExperiments[0].color;
-          
-          if (graphMode === "vt") {
-            const areaColor = experimentColor + "33";
-            context.fillStyle = areaColor;
-            context.beginPath();
-            context.moveTo(xFor(fitStart), plot.top + plotHeight);
-            const points = [
-              { time: fitStart, value: fit.slope * fitStart + fit.intercept },
-              ...fitData.filter((sample) => sample.time >= fitStart && sample.time <= fitEnd).map((sample) => ({ time: sample.time, value: graphValue(sample) })),
-              { time: fitEnd, value: fit.slope * fitEnd + fit.intercept }
-            ];
-            for (const point of points) {
-              context.lineTo(xFor(point.time), yFor(point.value));
-            }
-            context.lineTo(xFor(fitEnd), plot.top + plotHeight);
-            context.fill();
-          }
-          
           context.strokeStyle = experimentColor;
           context.lineWidth = 2;
           context.setLineDash([6, 4]);
@@ -766,6 +759,15 @@
           context.setLineDash([]);
         }
         context.restore();
+
+        if (graphMode === "vt" && verticalMinimum <= 0 && verticalMaximum >= 0) {
+          context.strokeStyle = "#000";
+          context.lineWidth = 1.2;
+          context.beginPath();
+          context.moveTo(plot.left, yFor(0));
+          context.lineTo(width - plot.right, yFor(0));
+          context.stroke();
+        }
       }
 
       function formatElapsedTime(timeMicros) {
@@ -797,16 +799,21 @@
         return data.length ? graphValue(data[data.length - 1]) : null;
       }
 
-      function analyzeRange(start, end, data) {
+      function rangePoints(start, end, data) {
         if (end <= start || data.length < 2) return null;
         const startVelocity = velocityAt(start, data);
         const endVelocity = velocityAt(end, data);
         if (startVelocity === null || endVelocity === null) return null;
-        const points = [
+        return [
           { time: start, value: startVelocity },
           ...data.filter((sample) => sample.time > start && sample.time < end).map((sample) => ({ time: sample.time, value: graphValue(sample) })),
           { time: end, value: endVelocity }
         ];
+      }
+
+      function analyzeRange(start, end, data) {
+        const points = rangePoints(start, end, data);
+        if (!points) return null;
         let meanTime = 0;
         let meanValue = 0;
         for (const point of points) {
@@ -1162,8 +1169,10 @@
           drawGraph();
         } else if (drag.type === "velocity-scale") {
           const limit = Math.min(20, Math.max(0.1, drag.initialScale * Math.exp((drag.startY - point.y) * 0.01)));
-          if (graphMode === "vt") velocityLimit = limit;
-          else positionLimit = limit;
+          if (graphMode === "vt") {
+            velocityLimit = limit;
+            clampVelocityViewOffset();
+          } else positionLimit = limit;
           drawGraph();
         } else if (drag.type === "pan") {
           const horizontalShift = ((point.x - drag.startX) / drag.plotWidth) * timeSpan;
@@ -1172,8 +1181,10 @@
           viewOffset = Math.max(minimumOffset, Math.min(0, drag.startOffset - horizontalShift));
           const verticalSpan = graphMode === "vt" ? velocityLimit * 2 : positionLimit;
           const verticalShift = ((point.y - drag.startY) / drag.plotHeight) * verticalSpan;
-          if (graphMode === "vt") velocityViewOffset = drag.startVerticalOffset + verticalShift;
-          else positionViewOffset = drag.startVerticalOffset + verticalShift;
+          if (graphMode === "vt") {
+            velocityViewOffset = drag.startVerticalOffset + verticalShift;
+            clampVelocityViewOffset();
+          } else positionViewOffset = drag.startVerticalOffset + verticalShift;
           drawGraph();
         } else if (Math.abs(point.x - drag.startX) > 3) {
           updateSelection(timeAtX(point.x, point.width));
@@ -1279,6 +1290,7 @@
               positionLimit = data.state.positionLimit ?? 2;
               viewOffset = data.state.viewOffset ?? 0;
               velocityViewOffset = data.state.velocityViewOffset ?? 0;
+              clampVelocityViewOffset();
               positionViewOffset = data.state.positionViewOffset ?? 0;
               measurementStarted = data.state.measurementStarted ?? true;
             } else {
